@@ -15,6 +15,54 @@ const uid = i => crypto.createHash('sha256').update(String(i)).digest('hex');
 const secret = 'integration-test-secret-at-least-32-characters';
 const rng = seed => () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296; };
 
+test('房主电脑补齐、移除与真人房主转交，不为电脑创建档案', async () => {
+  const store = new LocalStore(); await store.init();
+  const rooms = new Rooms(store); let r = await rooms.create(uid(0));
+  r = await rooms.join(uid(1), r.code);
+  const act = (who, type, value) => rooms.change(r.code, who, { id: crypto.randomUUID(), version: r.version, type, value });
+  await assert.rejects(act(uid(1), 'fill-bots'), /房主/);
+  r = await act(uid(0), 'fill-bots');
+  assert.equal(r.members.filter(p => p.bot).length, 2);
+  assert.ok(r.members.filter(p => p.bot).every(p => p.ready));
+  assert.equal(rooms.view(r, uid(0)).members[2].bot, true);
+  const bot = r.members[2].uid;
+  r = await act(uid(0), 'kick', bot);
+  r = await rooms.join(uid(2), r.code);
+  assert.equal(r.members[2].uid, uid(2));
+  assert.ok(r.members[3].ready);
+  r = await act(uid(0), 'leave');
+  assert.equal(r.host, uid(1));
+  r = await act(uid(1), 'leave');
+  r = await act(uid(2), 'leave');
+  assert.equal(r.closed, true);
+  assert.equal(Object.keys(store.data.profiles).length, 3);
+});
+
+test('一真人三电脑完整对局：快速合法出牌、分数守恒、真人结算幂等', async () => {
+  const store = new LocalStore(); await store.init(); let clock = 1000;
+  const rooms = new Rooms(store, { now: () => clock, random: rng(19) });
+  let r = await rooms.create(uid(0));
+  const act = async (type, value) => { r = await rooms.change(r.code, uid(0), { id: crypto.randomUUID(), version: r.version, type, value }); };
+  await act('fill-bots'); await act('ready', true); await act('start');
+  await assert.rejects(act('fill-bots'), /当前|牌局/);
+  for (let step = 0; step < 2500 && !r.game.result; step++) {
+    const s = r.game;
+    if (s.phase === 'bury' && s.dealer === 0) await act('bury', s.hands[0].slice(0, 8).map(c => c.id));
+    else if (s.phase === 'playing' && s.turn === 0) await act('play', R.suggest(s.hands[0], s.trick[0]?.cards || [], s).map(c => c.id));
+    else { clock += 250; r = await rooms.tick(r.code); }
+  }
+  assert.ok(r.game.result);
+  assert.ok(clock < 400000, '电脑不应等待真人30秒出牌时限');
+  assert.equal(r.game.teamScores.reduce((a, b) => a + b) + R.points(r.game.bottom), 200);
+  assert.equal(Object.keys(store.data.profiles).length, 1);
+  assert.ok(r.members.filter(p => p.bot).every(p => p.level === '2' && p.badges === 0));
+  const profile = structuredClone(store.data.profiles[uid(0)]);
+  clock = r.game.deadline; r = await rooms.tick(r.code);
+  assert.deepEqual(store.data.profiles[uid(0)], profile);
+  await act('ready', true); await act('start');
+  assert.equal(r.game.phase, 'dealing');
+});
+
 async function setup(store = new LocalStore(), options = {}) {
   await store.init(); let clock = 100000, n = 0;
   const rooms = new Rooms(store, { owner: 'test', now: () => clock, random: rng(4), ...options });

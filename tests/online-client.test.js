@@ -68,6 +68,26 @@ test('登录失败仍能输入房间码，显示权限原因且登录成功后�
   assert.equal(f.sent.at(-1).code, '654321');
   f.client.hide();
 });
+test('好友房仅房主可见补齐电脑入口，电脑显示自动准备和移除', async () => {
+  const f = fixture({ webGuest: true, wsUrl: 'ws://localhost/ws' });
+  f.client.enter(); await new Promise(resolve => setImmediate(resolve)); f.events.open();
+  f.message({ type: 'ack', profile: { uid: 'me', room: null } });
+  const me = { uid: 'me', name: '我', ready: false, online: true, level: '2', badges: 0 };
+  const state = { code: '123456', host: 'me', seat: 0, version: 1, members: [me, null, null, null], game: null };
+  f.message({ type: 'state', state }); f.client.draw();
+  assert.ok(f.buttons.some(b => b[5] === 'online:fill-bots'));
+  f.client.action('fill-bots'); assert.equal(f.sent.at(-1).type, 'fill-bots');
+  f.buttons.length = 0;
+  f.message({ type: 'state', state: { ...state, version: 2, members: [me, ...[1, 2, 3].map(i => ({ ...me, uid: 'bot:' + i, bot: true, ready: true, name: '电脑' + i }))] } });
+  f.client.draw();
+  assert.equal(f.buttons.some(b => b[5] === 'online:fill-bots'), false);
+  assert.ok(f.buttons.some(b => b[0] === '移除电脑'));
+  assert.ok(f.labels.includes('电脑 · 自动出牌'));
+  f.buttons.length = 0;
+  f.message({ type: 'state', state: { ...state, version: 3, host: 'other' } }); f.client.draw();
+  assert.equal(f.buttons.some(b => b[5] === 'online:fill-bots'), false);
+  f.client.hide();
+});
 test('小游戏云登录、邀请入房、手牌点击、合法提示和出牌确认', async () => {
   const f = fixture({ env: 'test-env', service: 'upgrade-game' });
   f.client.enter({ room: '123456', invite: 'ticket' });

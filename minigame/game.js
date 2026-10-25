@@ -11,15 +11,15 @@ const game = createGame({ progress, saveProgress: value => {
   try { wx.setStorageSync('upgrade-personal-progress-v1', value); }
   catch (error) { storageWarning = '等级保存失败，本次仅会话有效'; }
 } });
-const C = { bg: '#102621', panel: '#1b3930', gold: '#e6c57b', ink: '#f6f0df', muted: '#a9bdb0', red: '#ed8882', team: '#86d4bf' };
+const C = { bg: '#f5ebdd', panel: '#ead8ba', gold: '#825421', ink: '#283238', muted: '#665b4f', red: '#b83249', team: '#236b80' };
 let areas = [], viewport = { scale: 1, x: 0, y: 0 }, visible = true, frame = null;
 let lastAuto = Date.now();
 let animationOn = true;
 const W = 375, H = 760;
-const online = createOnline({ wx, text, box, button, lineCards, requestRender, colors: C,
-  hit: area => areas.push(area) });
 const warm = { bg: '#f5ebdd', panel: '#ead8ba', gold: '#825421', ink: '#283238', muted: '#665b4f', red: '#b83249', team: '#236b80' };
 const room = createLivingRoom({ wx, ctx, text, box, lineCards, requestRender, colors: warm });
+const online = createOnline({ wx, text, box, button, lineCards, requestRender, colors: C, room,
+  hit: area => areas.push(area) });
 function text(label, x, y, size = 14, color = C.ink, align = 'left') {
   ctx.fillStyle = color; ctx.font = `${size}px sans-serif`; ctx.textAlign = align;
   ctx.textBaseline = 'middle'; ctx.fillText(String(label), x, y);
@@ -31,10 +31,9 @@ function box(x, y, w, h, color, radius = 10) {
   ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); ctx.fill();
 }
 function button(label, x, y, w, h, action, value, selected = false, enabled = true) {
-  const local = !action.startsWith('online:');
-  const primary = local && enabled && selected;
-  box(x, y, w, h, primary ? '#e99a39' : selected ? C.gold : C.panel);
-  text(label, x + w / 2, y + h / 2, 14, !enabled ? C.muted : primary ? '#283238' : selected ? C.bg : C.ink, 'center');
+  const primary = enabled && selected;
+  box(x, y, w, h, !enabled ? '#dfd7ca' : primary ? '#e99a39' : C.panel);
+  text(label, x + w / 2, y + h / 2, 14, !enabled ? C.muted : primary ? '#283238' : C.ink, 'center');
   if (enabled) areas.push({ x, y, w, h, action, value });
 }
 function heading(kicker, title, sub) {
@@ -106,10 +105,11 @@ function render() {
   const scale = Math.min(width / W, (height - top - bottom) / H);
   viewport = { scale, x: (width - W * scale) / 2, y: top };
   ctx.translate(viewport.x, viewport.y); ctx.scale(scale, scale);
-  Object.assign(C, { bg: '#102621', panel: '#1b3930', gold: '#e6c57b', ink: '#f6f0df', muted: '#a9bdb0', red: '#ed8882', team: '#86d4bf' });
-  if (online.draw()) return;
   Object.assign(C, warm);
-  room.background();
+  if (online.draw()) return;
+  const dealing = ['dealing', 'calling', 'call-window'].includes(s.phase);
+  room.background(dealing);
+  if (dealing) box(14, 3, 347, 91, '#fff6e8', 18);
   text('♠ 熟人局升级', 20, 24, 23, C.gold);
   text('本地人机 · 你与对家陈皮组队', 20, 51, 12, C.muted);
   button(s.voice ? '模拟语音：开' : '模拟语音：关', 245, 10, 110, 40, 'voice');
@@ -129,16 +129,19 @@ function render() {
     button('开始这一局 →', 25, 670, 325, 46, 'start', null, true);
     button('好友联机房间 →', 25, 612, 325, 42, 'online:enter');
   } else if (['dealing', 'calling', 'call-window', 'vote', 'bury'].includes(s.phase)) {
-    text(`本局打 ${s.level} · ${s.trump || '尚未定主'}`, 22, 113, 16, C.gold); seats(s);
+    if (!dealing) { text(`本局打 ${s.level} · ${s.trump || '尚未定主'}`, 22, 113, 16, C.gold); seats(s); }
     if (['dealing', 'calling', 'call-window'].includes(s.phase)) {
-      text(s.phase === 'call-window' ? '你摸到级牌了，可以叫庄' : s.phase === 'dealing' ? `正在发牌 ${s.dealt} / 100` : '叫庄环节：请选择主花色', 22, 222, 22);
+      room.dealing({ players: s.players, counts: s.hands.map(h => h.length), level: s.level,
+        dealer: s.dealer, trump: s.trump, dealt: s.dealt, phase: s.phase });
       const canCall = s.hands[0].some(c => c.rank === s.level);
-      text(s.dealer >= 0 ? `${s.players[s.dealer].name}已叫主，不允许反主` : !canCall && s.phase === 'calling' ? '你没有级牌，无法主动叫庄，请点不叫' : '有对应级牌才能叫庄；你不叫后电脑才参与', 22, 255, 12, C.muted);
+      box(14, 384, 347, 65, '#fff6e8', 14);
       R.SUITS.forEach((suit, i) => {
         const eligible = s.dealer < 0 && s.hands[0].some(c => c.rank === s.level && c.suit === suit);
-        button(`${suit} ${eligible ? '叫庄' : '不可叫'}`, 22 + i % 2 * 170, 292 + Math.floor(i / 2) * 60,
-          155, 46, 'trump', suit, eligible, eligible);
+        button(`${suit} ${eligible ? '叫主' : '暂无'}`, 22 + i * 84, 388,
+          76, 25, 'trump', suit, eligible, eligible);
       });
+      box(14, 456, 347, 270, '#f4e7cc', 18);
+      text(s.dealer >= 0 ? `${s.players[s.dealer].name}已叫主，不允许反主` : !canCall && s.phase === 'calling' ? '你没有级牌，请点不叫' : '摸到对应级牌可叫主 · 你不叫后电脑才参与', 187, 686, 12, C.muted, 'center');
       if (s.phase === 'calling') button('不叫 →', 22, 413, 325, 34, 'pass');
       if (s.phase === 'call-window') button('这次不叫，继续发牌 →', 22, 413, 325, 34, 'pass');
     } else if (s.phase === 'vote') {

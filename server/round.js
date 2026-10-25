@@ -24,7 +24,7 @@ function settle(s, players, now) {
   const progress = R.calculateRoundProgress(s.score);
   const winningParity = progress.side === 'dealer' ? s.dealer % 2 : 1 - s.dealer % 2;
   const changes = players.map((p, i) => {
-    const before = p.level, gain = i % 2 === winningParity ? progress.levels : 0;
+    const before = p.level, gain = !p.bot && i % 2 === winningParity ? progress.levels : 0;
     const next = R.nextLevel(before, gain); p.level = next.level; p.badges += next.badges;
     return { before, after: p.level, gain, badges: next.badges };
   });
@@ -80,6 +80,17 @@ function resolve(hand, ids) {
   return ids.map(id => { const c = hand.find(c => c.id === id); if (!c) throw Error('不是你的手牌'); return c; });
 }
 function tick(s, players, now, random = Math.random) {
+  if (botDue(s, players, now)) {
+    if (s.phase === 'calling') {
+      const seat = players.findIndex((p, i) => p.bot && s.hands[i].some(c => c.rank === s.level && R.SUITS.includes(c.suit)));
+      action(s, players, seat, 'trump', s.hands[seat].find(c => c.rank === s.level && R.SUITS.includes(c.suit)).suit, now, random);
+    } else if (s.phase === 'vote') {
+      const seat = players.findIndex((p, i) => p.bot && !Object.hasOwn(s.votes, i));
+      action(s, players, seat, 'vote', false, now, random);
+    } else if (s.phase === 'bury') action(s, players, s.dealer, 'bury', s.hands[s.dealer].slice(0, 8).map(c => c.id), now, random);
+    else action(s, players, s.turn, 'play', R.suggest(s.hands[s.turn], s.trick[0]?.cards || [], s).map(c => c.id), now, random);
+    return true;
+  }
   if (!s.deadline || now < s.deadline) return false;
   if (s.phase === 'dealing') {
     for (let i = 0; i < 4; i++) s.hands[i].push(s.deck[s.dealt++]);
@@ -99,4 +110,12 @@ function tick(s, players, now, random = Math.random) {
   else return false;
   return true;
 }
-module.exports = { start, action, tick };
+function botDue(s, players, now) {
+  if (!s) return false;
+  if (s.phase === 'calling') return now >= s.deadline - 13500 && players.some((p, i) => p?.bot && s.hands[i].some(c => c.rank === s.level && R.SUITS.includes(c.suit)));
+  if (s.phase === 'vote') return now >= s.deadline - 18500 && players.some((p, i) => p?.bot && !Object.hasOwn(s.votes, i));
+  if (s.phase === 'bury') return !!players[s.dealer]?.bot && now >= s.deadline - 58500;
+  if (s.phase === 'playing') return !!players[s.turn]?.bot && now >= s.deadline - 28800;
+  return false;
+}
+module.exports = { start, action, tick, botDue };

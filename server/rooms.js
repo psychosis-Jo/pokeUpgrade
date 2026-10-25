@@ -41,7 +41,7 @@ class Rooms {
       const seat = r.members.indexOf(null); if (seat < 0) throw Error('房间已满');
       r.members[seat] = this.member(p, this.now()); delete r.blocked[uid];
       // A changed table cannot reuse a settled round's interaction or readiness.
-      r.game = null; r.members.filter(Boolean).forEach(m => { m.ready = false; });
+      r.game = null; r.members.filter(Boolean).forEach(m => { m.ready = !!m.bot; });
       p.room = code; r.version++; await tx.set('profiles', uid, p); await tx.set('rooms', code, r); return r;
     });
   }
@@ -49,7 +49,7 @@ class Rooms {
     const now = this.now();
     if (r.lease.owner !== this.owner && r.lease.until > now) throw Error('房间正在其他连接处理，请稍后重连');
     if (r.lease.owner !== this.owner) {
-      r.members.filter(Boolean).forEach(m => { m.disconnected = now; });
+      r.members.filter(m => m && !m.bot).forEach(m => { m.disconnected = now; });
       r.version++;
     }
     if (r.lease.owner !== this.owner || r.lease.until - now <= 5000) r.lease = { owner: this.owner, until: now + 15000 };
@@ -65,13 +65,23 @@ class Rooms {
       if (request.version !== r.version) throw Error('牌局已更新，请按最新状态重试');
       if (member.departing) throw Error('你已离开，当前由托管完成牌局');
       const { type, value } = request;
-      if (type === 'ready' && !active(r)) {
+      if (type === 'fill-bots') {
+        if (uid !== r.host) throw Error('只有房主可以补齐电脑');
+        if (r.game && r.game.phase !== 'reward') throw Error('当前牌局未结束，不能补齐电脑');
+        if (r.members.every(Boolean)) throw Error('房间已满');
+        r.game = null;
+        for (let i = 0; i < 4; i++) if (!r.members[i]) r.members[i] = {
+          uid: 'bot:' + crypto.randomUUID(), name: '电脑' + (i + 1), bot: true,
+          level: member.level, badges: 0, joined: this.now(), ready: true, disconnected: null, departing: false,
+        };
+      } else if (type === 'ready' && !active(r)) {
         if (r.game && r.game.phase !== 'reward') throw Error('请等待互动环节结束');
         member.ready = !!value;
       } else if (type === 'start' && uid === r.host && !active(r)) {
         if (r.game && r.game.phase !== 'reward') throw Error('请等待互动环节结束');
         if (!r.members.every(p => p && p.ready && !p.departing)) throw Error('需要四人准备');
         for (const m of r.members) {
+          if (m.bot) { m.ready = true; continue; }
           const p = await this.profile(tx, m.uid); m.level = p.level; m.badges = p.badges; m.ready = false;
         }
         const effects = r.game?.effects || [];
@@ -82,7 +92,8 @@ class Rooms {
       } else if (type === 'kick' && uid === r.host && !active(r)) {
         const target = r.members.findIndex(p => p && p.uid === value && p.uid !== uid);
         if (target < 0) throw Error('不能请出该玩家');
-        r.blocked[value] = r.invite; await this.remove(tx, r, target);
+        if (!r.members[target].bot) r.blocked[value] = r.invite;
+        await this.remove(tx, r, target);
       } else if (type === 'invite' && uid === r.host) r.invite = crypto.randomBytes(18).toString('hex');
       else if (r.game) G.action(r.game, r.members, seat, type, value, this.now(), this.random);
       else throw Error('当前不能执行此操作');
@@ -91,11 +102,15 @@ class Rooms {
     });
   }
   async remove(tx, r, seat) {
-    const m = r.members[seat], p = await this.profile(tx, m.uid);
-    p.room = null; await tx.set('profiles', m.uid, p); r.members[seat] = null;
-    if (r.host === m.uid) r.host = r.members.filter(Boolean).sort((a, b) => a.joined - b.joined)[0]?.uid || null;
+    const m = r.members[seat];
+    if (!m.bot) {
+      const p = await this.profile(tx, m.uid);
+      p.room = null; await tx.set('profiles', m.uid, p);
+    }
+    r.members[seat] = null;
+    if (r.host === m.uid) r.host = r.members.filter(p => p && !p.bot).sort((a, b) => a.joined - b.joined)[0]?.uid || null;
     r.closed = !r.host;
-    r.members.filter(Boolean).forEach(m => { m.ready = false; });
+    r.members.filter(Boolean).forEach(m => { m.ready = !!m.bot; });
   }
   async presence(code, uid, online) {
     return this.store.transaction(async tx => {
@@ -124,6 +139,7 @@ class Rooms {
         if (!wasResult && r.game.result) {
           // Profiles and the settled room are committed atomically: retries cannot award twice.
           for (const m of r.members) {
+            if (m.bot) continue;
             const p = await this.profile(tx, m.uid); p.level = m.level; p.badges = m.badges;
             await tx.set('profiles', m.uid, p);
           }
@@ -141,7 +157,7 @@ class Rooms {
     const g = r.game;
     const view = { code: r.code, host: r.host, seat, version: r.version, serverTime: this.now(),
       invite: r.invite, members: r.members.map(p => p ? { uid: p.uid, name: p.name, level: p.level, badges: p.badges,
-        ready: p.ready, online: p.disconnected === null, departing: p.departing } : null), game: null };
+        ready: p.ready, bot: !!p.bot, online: p.disconnected === null, departing: p.departing } : null), game: null };
     if (g) {
       const { deck, hands, bottom, pickedBottom, ...publicGame } = g;
       view.game = { ...publicGame, hand: R.sortHand(hands[seat], g), counts: hands.map(h => h.length),

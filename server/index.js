@@ -2,6 +2,7 @@ const http = require('node:http');
 const crypto = require('node:crypto');
 const { WebSocketServer, WebSocket } = require('ws');
 const { Rooms } = require('./rooms');
+const { botDue } = require('./round');
 const { LocalStore, CloudStore } = require('./store');
 const { sign, verify, guestCredential, restoreGuest } = require('./auth');
 // 兜底：任何未捕获的 Promise 拒绝只记录、不让进程退出，避免容器被 K8s 反复重启。
@@ -108,11 +109,11 @@ function createServer({ store, secret, localLogin = false, webGuest = false, now
           const actor = g?.phase === 'bury' ? g.dealer : g?.phase === 'playing' ? g.turn : -1;
           const disconnected = actor >= 0 ? cached.members[actor]?.disconnected : null;
           const takeoverDue = disconnected != null && clock >= disconnected + 30000;
-          if (cached && !takeoverDue && clock < cached.lease.until - 5000 && (!g?.deadline || clock < g.deadline)) {
+          if (cached && !takeoverDue && !botDue(g, cached.members, clock) && clock < cached.lease.until - 5000 && (!g?.deadline || clock < g.deadline)) {
             broadcast(cached); continue;
           }
           const r = await rooms.tick(code); broadcast(r);
-          if (!r || r.closed || !r.members.some(m => m && m.disconnected === null) && (!r.game || r.game.phase === 'reward')) watched.delete(code);
+          if (!r || r.closed || !r.members.some(m => m && !m.bot && m.disconnected === null) && (!r.game || r.game.phase === 'reward')) watched.delete(code);
         } catch (e) {
           for (const ws of clients) if (ws.code === code) send(ws, { type: 'notice', error: '房间恢复中，请稍后重新连接' });
           // Keep retrying after a previous instance's lease expires or the database recovers.

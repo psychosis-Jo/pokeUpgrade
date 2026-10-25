@@ -1,4 +1,4 @@
-// Local practice artwork only. Failed images leave the playable Canvas UI intact.
+// Shared room artwork. Failed images leave the playable Canvas UI intact.
 function createLivingRoom({ wx, ctx, box, text, lineCards, requestRender, colors }) {
   const images = {};
   const failed = new Set();
@@ -18,10 +18,11 @@ function createLivingRoom({ wx, ctx, box, text, lineCards, requestRender, colors
       im.width * scale, im.height * scale);
     return true;
   }
-  function background() {
+  function background(lobby = false) {
     box(0, 0, 375, 760, colors.bg, 0);
     const im = images.background;
     if (im) ctx.drawImage(im, 0, 0, 375, 760);
+    if (lobby) return;
     box(10, 3, 355, 91, '#fff6e8', 18);
     box(10, 99, 355, 352, '#fff6e8', 18);
     box(10, 456, 355, 270, '#f4e7cc', 18);
@@ -82,6 +83,31 @@ function createLivingRoom({ wx, ctx, box, text, lineCards, requestRender, colors
       });
     }
   }
-  return { background, table, failed };
+  function dealing({ players, counts, seat = 0, level, dealer, trump, dealt, phase }) {
+    const positions = [[145, 303], [265, 206], [145, 119], [25, 206]];
+    picture('table', 95, 196, 185, 143);
+    players.forEach((p, i) => {
+      const relative = (i - seat + 4) % 4, [x, y] = positions[relative];
+      const ally = relative % 2 === 0;
+      box(x, y, 85, 76, '#fff6e8', 14);
+      if (!picture(['self-avatar', 'right', 'teammate', 'left'][relative], x + 23, y + 2, 39, 36))
+        text(p.name.slice(0, 1), x + 42, y + 20, 19, colors.gold, 'center');
+      text(`${i === seat ? '你' : p.name.slice(0, 5)}${dealer === i ? '·庄' : ''}`, x + 42, y + 46, 11, colors.ink, 'center');
+      text(`${ally ? '我方' : '对手'} ${counts[i]}张`, x + 42, y + 64, 10, ally ? colors.team : colors.red, 'center');
+    });
+    // Only backs are shown on the table: the other three hands remain private.
+    for (let i = 0; i < 3; i++) {
+      box(164 + i * 3, 216 - i * 3, 37, 47, '#fff6e8', 6);
+      box(168 + i * 3, 220 - i * 3, 29, 39, '#367e95', 4);
+    }
+    text('♠', 189, 237, 24, '#fff6e8', 'center');
+    box(100, 272, 175, 25, '#fff6e8', 10);
+    text(phase === 'dealing' ? `正在发牌 ${dealt} / 100` : phase === 'call-window' ? '摸到级牌，可以叫主' : dealer >= 0 ? `${trump}主 · 打${level}` : '发牌完成，等待叫主', 187, 285, 12, colors.gold, 'center');
+    if (phase === 'dealing' || phase === 'call-window') {
+      box(112, 299, 151, 4, '#e0cfb4', 2);
+      if (dealt) box(112, 299, 151 * Math.min(dealt, 100) / 100, 4, '#e99a39', 2);
+    }
+  }
+  return { background, table, dealing, picture, failed };
 }
 module.exports = { createLivingRoom };
