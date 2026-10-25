@@ -3,10 +3,10 @@ const crypto = require('node:crypto');
 const { WebSocketServer, WebSocket } = require('ws');
 const { Rooms } = require('./rooms');
 const { LocalStore, CloudStore } = require('./store');
-const { sign, verify } = require('./auth');
+const { sign, verify, guestCredential, restoreGuest } = require('./auth');
 // 兜底：任何未捕获的 Promise 拒绝只记录、不让进程退出，避免容器被 K8s 反复重启。
 process.on('unhandledRejection', e => console.error('unhandledRejection:', e?.message || e));
-function createServer({ store, secret, localLogin = false, now, random }) {
+function createServer({ store, secret, localLogin = false, webGuest = false, now, random }) {
   if (!secret || secret.length < 32) throw Error('SESSION_SECRET至少32个字符');
   const rooms = new Rooms(store, { now, random });
   const clients = new Set(), watched = new Set(), cache = new Map();
@@ -14,7 +14,6 @@ function createServer({ store, secret, localLogin = false, now, random }) {
   recovery.catch(() => { console.error('Room recovery scan failed; check database permissions'); });
   const server = http.createServer((req, res) => {
     if (req.url === '/healthz') { res.writeHead(200); return res.end('ok'); }
-    if (req.url === '/diag') { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ envKeys: Object.keys(process.env).filter(k => /TENCENTCLOUD|SECRET|CLOUD_ENV|SESSION/i.test(k)), hasSecretId: !!process.env.TENCENTCLOUD_SECRETID, hasSecretKey: !!process.env.TENCENTCLOUD_SECRETKEY, cloudEnv: process.env.CLOUD_ENV })); }
     // No test identity endpoint exists in cloud deployments.
     if (localLogin && req.method === 'POST' && req.url === '/dev-login') {
       let body = ''; req.on('data', b => { body += b; if (body.length > 1024) req.destroy(); });
@@ -50,9 +49,13 @@ function createServer({ store, secret, localLogin = false, now, random }) {
         try {
           m = JSON.parse(raw.toString());
           if (!m || typeof m.id !== 'string' || m.id.length > 100 || !m.id.length) throw Error('请求编号无效');
-          if (m.type === 'auth') {
+          if (m.type === 'auth' || m.type === 'guest') {
             if (ws.uid) throw Error('已经登录');
-            ws.uid = verify(m.token, secret); clearTimeout(timeout);
+            if (m.type === 'guest' && !webGuest) throw Error('网页好友房尚未开放');
+            const authenticated = m.type === 'guest'
+              ? m.credential ? restoreGuest(m.credential, secret) : crypto.randomBytes(32).toString('hex')
+              : verify(m.token, secret);
+            ws.uid = authenticated; clearTimeout(timeout);
             // A single active connection per account prevents ambiguous presence/turn ownership.
             for (const old of clients) if (old !== ws && old.uid === ws.uid) { old.superseded = true; old.close(4002, 'another connection'); }
             const profile = await rooms.current(ws.uid);
@@ -60,7 +63,8 @@ function createServer({ store, secret, localLogin = false, now, random }) {
               try { const r = await rooms.presence(profile.room, ws.uid, true); ws.code = r.code; watched.add(r.code); broadcast(r); }
               catch (e) { send(ws, { type: 'notice', error: e.message }); }
             }
-            return send(ws, { type: 'ack', id: m.id, profile });
+            return send(ws, { type: 'ack', id: m.id, profile,
+              ...(m.type === 'guest' ? { credential: guestCredential(ws.uid, secret) } : {}) });
           }
           if (!ws.uid) throw Error('请先登录');
           let r;
@@ -128,18 +132,17 @@ function createServer({ store, secret, localLogin = false, now, random }) {
   return { server, rooms, close, recovery, advance: async code => { const r = await rooms.tick(code); broadcast(r); return r; } };
 }
 async function main() {
-  console.log('[diag] env keys:', Object.keys(process.env).filter(k => /TENCENTCLOUD|SECRET|CLOUD_ENV|SESSION/i.test(k)).join(','));
   const cloudMode = process.env.STORE === 'cloud';
   if (cloudMode && process.env.DEV_LOGIN === '1') throw Error('云部署禁止开发登录');
   let store;
   if (cloudMode) {
     const cloud = require('wx-server-sdk');
-    // 云托管服务在 upgrade-test 环境、数据库在 cloud1 环境（跨环境），必须靠 CLOUD_ENV 显式指定目标环境，
-    // 且需在云托管控制台手动配置 TENCENTCLOUD_SECRETID / TENCENTCLOUD_SECRETKEY（平台不会跨环境注入凭证）。
+    // 云托管服务与数据库同属 cloud1 环境。TENCENTCLOUD_SECRETID / TENCENTCLOUD_SECRETKEY 已在
+    // 云托管控制台环境变量中配置（平台不会自动注入凭证），CLOUD_ENV 写死在镜像里指定目标环境。
     cloud.init({ env: process.env.CLOUD_ENV }); store = new CloudStore(cloud.database());
   } else store = new LocalStore(process.env.DATA_FILE || './.local/upgrade.json');
   await store.init();
-  const app = createServer({ store, secret: process.env.SESSION_SECRET, localLogin: !cloudMode && process.env.DEV_LOGIN === '1' });
+  const app = createServer({ store, secret: process.env.SESSION_SECRET, localLogin: !cloudMode && process.env.DEV_LOGIN === '1', webGuest: process.env.WEB_GUEST === '1' });
   const port = Number(process.env.PORT || 8080);
   app.server.listen(port, cloudMode ? '0.0.0.0' : '127.0.0.1', () => console.log(`Upgrade server listening on ${port} (${cloudMode ? 'cloud' : 'local'})`));
 }

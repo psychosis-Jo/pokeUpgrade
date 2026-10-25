@@ -13,4 +13,12 @@ function verify(token, secret, now = Date.now()) {
   if (!/^[a-f0-9]{64}$/.test(claims.uid) || !Number.isFinite(claims.exp) || claims.exp <= now) throw Error('登录已失效');
   return claims.uid;
 }
-module.exports = { sign, verify };
+// Separate signing domain: a browser recovery credential cannot authenticate as a session.
+function guestCredential(uid, secret, now = Date.now()) {
+  const body = Buffer.from(JSON.stringify({ uid, exp: now + 180 * 86400000 })).toString('base64url');
+  return body + '.' + crypto.createHmac('sha256', secret + ':browser-recovery').update(body).digest('base64url');
+}
+function restoreGuest(token, secret, now = Date.now()) {
+  return verify(token, secret + ':browser-recovery', now);
+}
+module.exports = { sign, verify, guestCredential, restoreGuest };

@@ -7,6 +7,9 @@ const source = fs.readFileSync(require.resolve('../minigame/online'), 'utf8');
 function fixture(config) {
   const module = { exports: {} }, labels = [], hits = [], buttons = [], sent = [], events = {};
   const wx = {
+    getStorageSync: key => events.storage?.[key],
+    setStorageSync: (key, value) => { (events.storage ||= {})[key] = value; },
+    connectSocket: () => task,
     cloud: { init() {}, callFunction: async () => ({ result: { token: 'signed-token' } }),
       connectContainer: async () => ({ socketTask: task }) },
     showModal: opts => opts.success({ confirm: true, content: '123456' }),
@@ -31,6 +34,39 @@ test('未配置云环境时好友房提示配置，人机入口可返回', async
   assert.equal(f.client.draw(), true);
   assert.ok(f.labels.some(s => s.includes('好友房尚未部署')));
   f.client.action('back'); assert.equal(f.client.draw(), false);
+});
+test('网页好友房使用恢复凭证并保存续期身份，邀请自动入房', async () => {
+  const f = fixture({ webGuest: true, wsUrl: 'ws://localhost/ws' });
+  f.events.storage = { 'upgrade-browser-identity-v1': 'previous-credential' };
+  f.client.enter({ room: '123456', invite: 'ticket' });
+  await new Promise(resolve => setImmediate(resolve));
+  f.events.open();
+  assert.equal(f.sent[0].type, 'guest');
+  assert.equal(f.sent[0].credential, 'previous-credential');
+  assert.equal(f.sent[0].token, undefined);
+  f.message({ type: 'ack', credential: 'renewed-credential', profile: { uid: 'browser-me', room: null } });
+  assert.equal(f.events.storage['upgrade-browser-identity-v1'], 'renewed-credential');
+  assert.equal(f.sent[1].type, 'join');
+  assert.equal(f.sent[1].code, '123456');
+  f.client.hide();
+});
+test('登录失败仍能输入房间码，显示权限原因且登录成功后才提交入房', async () => {
+  const f = fixture({ webGuest: true, wsUrl: 'ws://localhost/ws' });
+  f.client.enter(); await new Promise(resolve => setImmediate(resolve));
+  f.events.open();
+  f.message({ type: 'error', error: 'you are not authorized to perform operation (tcb:RunTransaction)' });
+  f.client.draw();
+  const input = f.buttons.find(b => b[5] === 'online:join-code');
+  assert.equal(input[8], true);
+  assert.ok(f.labels.some(s => s.includes('数据库事务权限不足')));
+  f.client.action('join-code');
+  f.events.confirm({ value: '654321' });
+  assert.equal(f.sent.filter(m => m.type === 'join').length, 0);
+  f.client.draw(); assert.ok(f.labels.some(s => s.includes('654321')));
+  f.message({ type: 'ack', profile: { uid: 'me', room: null } });
+  assert.equal(f.sent.at(-1).type, 'join');
+  assert.equal(f.sent.at(-1).code, '654321');
+  f.client.hide();
 });
 test('小游戏云登录、邀请入房、手牌点击、合法提示和出牌确认', async () => {
   const f = fixture({ env: 'test-env', service: 'upgrade-game' });

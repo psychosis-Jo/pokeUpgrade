@@ -1,4 +1,4 @@
-# 网页人机体验
+# 网页体验与好友房
 
 ## 已部署的固定访问地址
 
@@ -10,7 +10,26 @@ https://cloud1-d6g6wlodae4bf1192-1516105269.tcloudbaseapp.com/upgrade/index.html
 
 更新部署命令：`npm exec --yes --package=@cloudbase/cli -- tcb hosting deploy ./web-dist upgrade --env-id cloud1-d6g6wlodae4bf1192 --verify --json`
 
-复用小游戏的规则、牌局控制、Canvas 绘制和客厅素材，只增加浏览器兼容入口。网页不接入微信登录或联机，等级保存在当前浏览器，与微信联机成绩独立。
+复用小游戏的规则、Canvas 绘制、客厅素材及服务端联机控制。保留人机练习，新增四人好友房；网页不接入微信登录。
+
+## 网页好友房
+
+首次进入好友房时，服务端随机签发浏览器身份，不接受客户端指定身份。恢复凭证保存在当前浏览器，有效期180天，每次成功登录续期。清理浏览器数据、换浏览器或使用另一台设备，会成为新玩家；不会导入微信账号等级。人机练习进度仍独立保存在本机。
+
+创建房间后点击“邀请”分享链接，或让朋友使用6位房间码加入。四人准备后由房主开局。刷新页面后再次进入好友房可恢复身份及尚在的房间。没有真实语音。
+
+服务端开启方式：`WEB_GUEST=1`，Dockerfile已启用。数据库凭证和 `SESSION_SECRET` 只通过云服务运行时配置注入；更新服务时不要覆盖原环境变量。
+
+网页连接地址：`wss://upgrade-game-334898-11-1516105269.sh.run.tcloudbase.com/ws`。构建时可用 `WEB_WS_URL` 覆盖，供本地联调使用。小游戏配置保持原状，不在此次网页适配中修改。
+
+本地验证（2026-10-25）：45项测试通过，包含四个真实WebSocket连接打完整局、暗牌隔离、身份恢复和伪造身份拒绝。四个隔离浏览器已实际点击验证邀请链接/房间码入房、准备、开局和刷新恢复，无脚本异常。截图：`output/web-friends-local.png`。四人手机真人整局验收仍需进行。
+
+### 云端实测与阻塞（2026-10-25）
+
+- 后端 `upgrade-game-007` 部署成功，网页10个文件上传和校验成功。新镜像不含会话密钥，沿用云托管已有的运行时变量。
+- 实际连接云端WebSocket并请求浏览器登录时，数据库返回 `you are not authorized to perform operation (tcb:RunTransaction)`（`SIGN_PARAM_INVALID`）。好友房暂不可用，不能以健康检查通过代替联机验收。
+- 当前服务确实已配置 `TENCENTCLOUD_SECRETID`、`TENCENTCLOUD_SECRETKEY`、`SESSION_SECRET`；不是变量缺失。需要凭证所有者检查访问 `cloud1-d6g6wlodae4bf1192` 的事务权限，或在控制台替换为有相应权限的服务端凭证。凭证只填云托管环境变量，不发到聊天中。
+- 修复后需重新验证至少两次真实数据库操作，再完成四客户端云端入房、整局和重连；这部分尚未通过。人机练习仍可使用。
 
 构建：`node scripts/build-web.cjs`
 

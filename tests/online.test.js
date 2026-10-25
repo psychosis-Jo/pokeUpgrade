@@ -9,7 +9,7 @@ const { LocalStore } = require('../server/store');
 const { Rooms } = require('../server/rooms');
 const G = require('../server/round');
 const R = require('../minigame/rules');
-const { sign, verify } = require('../server/auth');
+const { sign, verify, guestCredential, restoreGuest } = require('../server/auth');
 const { createServer } = require('../server');
 const uid = i => crypto.createHash('sha256').update(String(i)).digest('hex');
 const secret = 'integration-test-secret-at-least-32-characters';
@@ -34,6 +34,14 @@ test('可信会话拒绝篡改、伪造和过期身份', () => {
   assert.throws(() => verify(token + 'x', secret, 1001));
   assert.throws(() => verify(token, secret, 1000 + 7200000));
   assert.throws(() => verify(sign('fake', secret, 1000), secret, 1001));
+});
+test('浏览器恢复凭证隔离普通会话，拒绝篡改及过期', () => {
+  const credential = guestCredential(uid(1), secret, 1000);
+  assert.equal(restoreGuest(credential, secret, 1001), uid(1));
+  assert.throws(() => restoreGuest(credential + 'x', secret, 1001));
+  assert.throws(() => restoreGuest(credential, secret, 1000 + 180 * 86400000));
+  assert.throws(() => verify(credential, secret, 1001));
+  assert.throws(() => restoreGuest(sign(uid(1), secret, 1000), secret, 1001));
 });
 test('无人叫主投票3票重发，超时定庄、扣底及出牌均自动推进', () => {
   const players = Array.from({ length: 4 }, () => ({ level: '2', badges: 0 }));
@@ -159,7 +167,7 @@ test('断线30秒托管，重连不撤销出牌，重启后租约隔离并恢复
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 
-async function wireClient(url, token) {
+async function wireClient(url, token, expectedType = 'ack') {
   const ws = new WebSocket(url), waiting = new Map(); let seq = 0, state;
   ws.on('message', raw => {
     const m = JSON.parse(raw);
@@ -172,16 +180,47 @@ async function wireClient(url, token) {
     const timeout = setTimeout(() => { waiting.delete(id); reject(Error('请求超时')); }, 3000);
     waiting.set(id, reply => { clearTimeout(timeout); resolve(reply); }); ws.send(JSON.stringify({ ...m, id }));
   });
-  assert.equal((await request({ type: 'auth', token })).type, 'ack');
-  return { ws, request, state: () => state };
+  const login = await request(typeof token === 'object' ? token : { type: 'auth', token });
+  assert.equal(login.type, expectedType);
+  return { ws, request, login, state: () => state };
 }
-test('四个真实WebSocket客户端入房并完成整局，外来身份与非回合操作被拒绝', async () => {
-  const store = new LocalStore(); await store.init(); let now = 100000;
-  const app = createServer({ store, secret, now: () => now, random: rng(8) });
+test('浏览器匿名身份由服务器生成，恢复原房间且不能伪造他人身份', async () => {
+  const store = new LocalStore(); await store.init();
+  const app = createServer({ store, secret, webGuest: true });
   await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
   const url = `ws://127.0.0.1:${app.server.address().port}/ws`, clients = [];
   try {
-    for (let i = 0; i < 4; i++) clients.push(await wireClient(url, sign(uid(i), secret)));
+    const first = await wireClient(url, { type: 'guest', uid: uid(1) }); clients.push(first);
+    assert.notEqual(first.login.profile.uid, uid(1));
+    await first.request({ type: 'create' }); const code = first.state().code;
+    const second = await wireClient(url, { type: 'guest' }); clients.push(second);
+    assert.notEqual(second.login.profile.uid, first.login.profile.uid);
+    assert.equal((await second.request({ type: 'guest', credential: first.login.credential })).type, 'error');
+    const restored = await wireClient(url, { type: 'guest', credential: first.login.credential }); clients.push(restored);
+    assert.equal(restored.login.profile.uid, first.login.profile.uid);
+    assert.equal(restored.state().code, code);
+    const invalid = await wireClient(url, { type: 'guest', credential: first.login.credential + 'x' }, 'error'); clients.push(invalid);
+    assert.equal((await invalid.request({ type: 'create' })).type, 'error');
+  } finally { for (const c of clients) c.ws.terminate(); await app.close(); }
+});
+test('默认不开启网页身份，不能绕过微信登录创建房间', async () => {
+  const store = new LocalStore(); await store.init();
+  const app = createServer({ store, secret });
+  await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
+  let client;
+  try {
+    client = await wireClient(`ws://127.0.0.1:${app.server.address().port}/ws`, { type: 'guest' }, 'error');
+    assert.match(client.login.error, /尚未开放/);
+    assert.equal((await client.request({ type: 'create' })).type, 'error');
+  } finally { client?.ws.terminate(); await app.close(); }
+});
+test('四个真实WebSocket客户端入房并完成整局，外来身份与非回合操作被拒绝', async () => {
+  const store = new LocalStore(); await store.init(); let now = 100000;
+  const app = createServer({ store, secret, webGuest: true, now: () => now, random: rng(8) });
+  await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
+  const url = `ws://127.0.0.1:${app.server.address().port}/ws`, clients = [];
+  try {
+    for (let i = 0; i < 4; i++) clients.push(await wireClient(url, { type: 'guest' }));
     await clients[0].request({ type: 'create' }); const code = clients[0].state().code;
     for (let i = 1; i < 4; i++) assert.equal((await clients[i].request({ type: 'join', code })).type, 'ack');
     const get = () => store.transaction(tx => tx.get('rooms', code));

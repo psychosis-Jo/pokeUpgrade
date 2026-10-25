@@ -6,7 +6,11 @@ function createOnline({ wx, text, box, button, hit, lineCards, requestRender, co
   let seq = 0, generation = 0, reconnect = null, hidden = false, pendingInvite = null, showPrevious = false;
   const pending = new Map();
   const id = () => `${Date.now()}-${++seq}-${Math.random().toString(36).slice(2)}`;
-  function notify(message) { status = message; requestRender(); }
+  function notify(message) {
+    status = /RunTransaction/.test(message)
+      ? '好友房连接失败：数据库事务权限不足，请管理员修复' : message;
+    requestRender();
+  }
   function send(type, value, extra = {}) {
     if (!socket || !uid) { notify('连接尚未就绪，请稍候'); return; }
     const requestId = id();
@@ -24,7 +28,9 @@ function createOnline({ wx, text, box, button, hit, lineCards, requestRender, co
     notify('正在连接好友房…');
     try {
       let token;
-      if (config.localUrl) {
+      if (config.webGuest) {
+        // Browser identity is issued and verified by the server, separate from WeChat.
+      } else if (config.localUrl) {
         if (!config.localPlayer) throw Error('本地联调请配置唯一localPlayer');
         const login = await new Promise((resolve, reject) => wx.request({
           url: config.localUrl.replace(/^ws/, 'http').replace(/\/ws$/, '/dev-login'), method: 'POST',
@@ -47,7 +53,15 @@ function createOnline({ wx, text, box, button, hit, lineCards, requestRender, co
       }
       if (gen !== generation || hidden) { task.close({}); return; }
       socket = task;
-      task.onOpen(() => { if (gen === generation) task.send({ data: JSON.stringify({ type: 'auth', id: id(), token }) }); });
+      task.onOpen(() => {
+        if (gen !== generation) return;
+        let credential;
+        if (config.webGuest) {
+          try { credential = wx.getStorageSync('upgrade-browser-identity-v1'); }
+          catch { notify('浏览器存储不可用，离开页面后可能无法找回身份'); }
+        }
+        task.send({ data: JSON.stringify(config.webGuest ? { type: 'guest', id: id(), credential } : { type: 'auth', id: id(), token }) });
+      });
       task.onMessage(event => {
         if (gen !== generation) return;
         let m; try { m = JSON.parse(event.data); } catch { notify('服务器消息无法读取'); return; }
@@ -63,11 +77,16 @@ function createOnline({ wx, text, box, button, hit, lineCards, requestRender, co
             if (firstSync) notify('房间已同步');
           }
         } else if (m.type === 'ack') {
+          let identitySaved = true;
+          if (config.webGuest && m.credential) {
+            try { wx.setStorageSync('upgrade-browser-identity-v1', m.credential); }
+            catch { identitySaved = false; }
+          }
           const req = pending.get(m.id); pending.delete(m.id);
           if (req && ['play', 'bury'].includes(req.type)) selected = [];
           if (req?.type === 'invite') share();
           if (m.profile) {
-            uid = m.profile.uid; notify('已登录好友房');
+            uid = m.profile.uid; notify(identitySaved ? '已登录好友房' : '身份无法保存，请勿关闭页面');
             if (pendingInvite && !m.profile.room) { const invite = pendingInvite; pendingInvite = null; send('join', null, invite); }
           }
         } else { pending.delete(m.id); notify(m.error || '请求未完成'); }
@@ -105,6 +124,10 @@ function createOnline({ wx, text, box, button, hit, lineCards, requestRender, co
         const code = (r.value || '').trim();
         cleanup(); wx.hideKeyboard({});
         if (!/^\d{6}$/.test(code)) return notify('请输入6位数字房间码');
+        if (!uid) {
+          pendingInvite = { code };
+          return notify(`已记住房间码 ${code}，尚未登录；请重新连接后加入`);
+        }
         send('join', null, { code });
       };
       const complete = () => { cleanup(); };
@@ -148,7 +171,7 @@ function createOnline({ wx, text, box, button, hit, lineCards, requestRender, co
     if (!state) {
       text(uid ? '邀请朋友，一起开局' : '连接好友房', 22, 145, 24, C.gold);
       b('创建房间', 22, 230, 325, 50, 'create', null, true, !!uid);
-      b('输入房间码加入', 22, 300, 325, 50, 'join-code', null, false, !!uid);
+      b('输入房间码加入', 22, 300, 325, 50, 'join-code');
       b('重新连接', 22, 390, 325, 46, 'reconnect');
       b('返回人机练习', 22, 670, 325, 46, 'back');
     } else {
