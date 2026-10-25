@@ -38,8 +38,13 @@ function createOnline({ wx, text, box, button, hit, lineCards, requestRender, co
         const login = await wx.cloud.callFunction({ name: 'login' }); token = login.result.token;
       }
       if (gen !== generation || hidden) return;
-      const task = config.localUrl ? wx.connectSocket({ url: config.localUrl }) :
-        (await wx.cloud.connectContainer({ config: { env: config.env }, service: config.service, path: '/ws' })).socketTask;
+      let task;
+      if (config.localUrl) task = wx.connectSocket({ url: config.localUrl });
+      else if (config.wsUrl) task = wx.connectSocket({ url: config.wsUrl });
+      else {
+        const container = await wx.cloud.connectContainer({ config: { env: config.env }, service: config.service, path: '/ws' });
+        task = container.socketTask;
+      }
       if (gen !== generation || hidden) { task.close({}); return; }
       socket = task;
       task.onOpen(() => { if (gen === generation) task.send({ data: JSON.stringify({ type: 'auth', id: id(), token }) }); });

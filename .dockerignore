@@ -4,3 +4,8 @@ node_modules
 .git
 tests
 docs
+.agents
+miniprogram
+*.png
+*.md
+.DS_Store

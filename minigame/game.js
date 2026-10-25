@@ -1,6 +1,7 @@
 const { createGame, EFFECTS } = require('./round');
 const R = require('./rules');
 const { createOnline } = require('./online');
+const { createLivingRoom } = require('./living-room');
 const canvas = wx.createCanvas();
 const ctx = canvas.getContext('2d');
 let storageWarning = '';
@@ -17,6 +18,8 @@ let animationOn = true;
 const W = 375, H = 760;
 const online = createOnline({ wx, text, box, button, lineCards, requestRender, colors: C,
   hit: area => areas.push(area) });
+const warm = { bg: '#f5ebdd', panel: '#ead8ba', gold: '#825421', ink: '#283238', muted: '#665b4f', red: '#b83249', team: '#236b80' };
+const room = createLivingRoom({ wx, ctx, text, box, lineCards, requestRender, colors: warm });
 function text(label, x, y, size = 14, color = C.ink, align = 'left') {
   ctx.fillStyle = color; ctx.font = `${size}px sans-serif`; ctx.textAlign = align;
   ctx.textBaseline = 'middle'; ctx.fillText(String(label), x, y);
@@ -28,8 +31,10 @@ function box(x, y, w, h, color, radius = 10) {
   ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); ctx.fill();
 }
 function button(label, x, y, w, h, action, value, selected = false, enabled = true) {
-  box(x, y, w, h, selected ? C.gold : C.panel);
-  text(label, x + w / 2, y + h / 2, 14, !enabled ? C.muted : selected ? C.bg : C.ink, 'center');
+  const local = !action.startsWith('online:');
+  const primary = local && enabled && selected;
+  box(x, y, w, h, primary ? '#e99a39' : selected ? C.gold : C.panel);
+  text(label, x + w / 2, y + h / 2, 14, !enabled ? C.muted : primary ? '#283238' : selected ? C.bg : C.ink, 'center');
   if (enabled) areas.push({ x, y, w, h, action, value });
 }
 function heading(kicker, title, sub) {
@@ -46,15 +51,16 @@ function lineCards(cards, x, y, perLine = 10, size = 12, step = 29) {
   });
 }
 function hand(s, selectable = false) {
+  box(14, 456, 347, 202, '#f4e7cc', 14);
   text(`你的手牌 ${s.hands[0].length} 张 · 已选 ${s.selected.length} 张`, 22, 464, 13, C.gold);
   s.hands[0].forEach((c, i) => {
     const x = 22 + i % 11 * 30, y = 488 + Math.floor(i / 11) * 54 - (s.selected.includes(c.id) ? 7 : 0);
-    if (s.selected.includes(c.id)) box(x - 2, y - 2, 31, 52, C.gold, 5);
+    if (s.selected.includes(c.id)) box(x - 2, y - 2, 31, 52, '#367e95', 5);
     box(x, y, 27, 48, '#f7f2e7', 4);
     const red = c.suit === '♥' || c.suit === '♦' || c.rank === 'BJ';
     const color = red ? '#bb3939' : '#22392d';
-    text(c.rank === 'SJ' ? '小' : c.rank === 'BJ' ? '大' : c.rank, x + 4, y + 14, 13, color);
-    text(c.suit === 'J' ? '王' : c.suit, x + 4, y + 32, 15, color);
+    text(c.rank === 'SJ' ? '小' : c.rank === 'BJ' ? '大' : c.rank, x + 4, y + 14, 15, color);
+    text(c.suit === 'J' ? '王' : c.suit, x + 4, y + 32, 17, color);
     if (R.category(c, s) === 'T') {
       text(c.suit === 'J' ? '王' : c.rank === s.level ? '级' : '主', x + 22, y + 38, 8, '#8a641b', 'center');
     }
@@ -100,7 +106,10 @@ function render() {
   const scale = Math.min(width / W, (height - top - bottom) / H);
   viewport = { scale, x: (width - W * scale) / 2, y: top };
   ctx.translate(viewport.x, viewport.y); ctx.scale(scale, scale);
+  Object.assign(C, { bg: '#102621', panel: '#1b3930', gold: '#e6c57b', ink: '#f6f0df', muted: '#a9bdb0', red: '#ed8882', team: '#86d4bf' });
   if (online.draw()) return;
+  Object.assign(C, warm);
+  room.background();
   text('♠ 熟人局升级', 20, 24, 23, C.gold);
   text('本地人机 · 你与对家陈皮组队', 20, 51, 12, C.muted);
   button(s.voice ? '模拟语音：开' : '模拟语音：关', 245, 10, 110, 40, 'voice');
@@ -116,7 +125,7 @@ function render() {
       text(i % 2 === 0 ? '你的队伍' : '对手队伍', x + 18, y + 88, 12, C.muted);
     });
     text('三名电脑按合法规则行动，不是固定脚本', 187, 552, 13, C.muted, 'center');
-    text('联机、邀请和真实语音尚未接入', 187, 579, 13, C.muted, 'center');
+    text('好友联机请进入房间 · 暂无真实语音', 187, 579, 13, C.muted, 'center');
     button('开始这一局 →', 25, 670, 325, 46, 'start', null, true);
     button('好友联机房间 →', 25, 612, 325, 42, 'online:enter');
   } else if (['dealing', 'calling', 'call-window', 'vote', 'bury'].includes(s.phase)) {
@@ -154,33 +163,20 @@ function render() {
   } else if (s.phase === 'playing' || s.phase === 'trick') {
     text(`第${s.round}墩 · ${s.trump}主 · 打${s.level} · 你是${s.dealer % 2 === 0 ? '庄家方' : '闲家方'}`, 22, 108, 14, C.gold);
     text(`闲家${s.dealer % 2 ? '（我方）' : '（对方）'} ${s.score}/80 · 庄家队累计 ${s.teamScores[s.dealer % 2]}分`, 22, 128, 12, C.muted);
-    seats(s); box(20, 190, 335, 247, C.panel, 20);
-    if (!s.trick.length) {
-      text(`${s.players[s.turn].name}领出`, 187, 266, 23, C.gold, 'center');
-      text('单张、对子或连续拖拉机', 187, 302, 14, C.muted, 'center');
-    }
-    const rows = Math.max(1, ...s.trick.map(entry => Math.ceil(entry.cards.length / 11)));
-    const slot = 51;
-    s.trick.forEach((entry, i) => {
-      const y = 201 + i * slot;
-      const ally = entry.player % 2 === 0;
-      text(`${s.players[entry.player].name} · ${ally ? '我方' : '对手'}${s.phase === 'trick' && s.trickWinner === entry.player ? ' · 赢' : ''}`,
-        30, y, 10, ally ? C.team : C.red);
-      lineCards(entry.cards, 32, y + 13, 11, rows === 3 ? 9 : 11, 28);
-    });
+    room.table(s);
     if (s.phase === 'trick') {
       text(`${s.players[s.trickWinner].name}赢墩 · 本墩${s.trickPoints}分 → ${s.trickWinner % 2 === s.dealer % 2 ? '庄家方' : '闲家方'}`,
-        187, 425, 12, C.gold, 'center');
-      text(R.explainTrick(s.trick, s.trickWinner, s), 22, 448, 11, C.muted);
+        187, 452, 10, C.gold, 'center');
+      text(R.explainTrick(s.trick, s.trickWinner, s), 22, 647, 10, C.muted);
     }
     if (s.error) {
-      box(30, 252, 315, 137, '#56332b', 14);
-      text('这手牌暂时不能出', 46, 276, 18, '#ffcb9b');
+      box(30, 252, 315, 137, '#fff1e1', 14);
+      text('这手牌暂时不能出', 46, 276, 18, '#a33727');
       const chars = Array.from(s.error);
       for (let i = 0; i < chars.length; i += 19) {
         text(chars.slice(i, i + 19).join(''), 46, 307 + Math.floor(i / 19) * 21, 14);
       }
-      text('重新选牌，或点「提示」选择合法牌', 46, 369, 13, C.gold);
+      text('重新选牌，或点「推荐」选择合法牌', 46, 369, 13, C.gold);
     }
     if (s.phase === 'playing' && s.trick.length) {
       const lead = R.shape(s.trick[0].cards, s);
@@ -190,7 +186,7 @@ function render() {
     if (s.phase === 'trick') {
       button(s.hands[0].length ? '下一墩 →' : '查看结算 →', 22, 670, 325, 46, 'continue', null, true);
     } else if (s.turn === 0) {
-      button('提示', 22, 670, 70, 46, 'hint'); button('清空', 102, 670, 65, 46, 'clear');
+      button('推荐', 22, 670, 70, 46, 'hint'); button('清空', 102, 670, 65, 46, 'clear');
       button(`出牌 ${s.selected.length}张 →`, 177, 670, 170, 46, 'play', null, true);
     } else text(`${s.players[s.turn].name}正在出牌…`, 187, 692, 16, C.gold, 'center');
   } else if (s.phase === 'result') {

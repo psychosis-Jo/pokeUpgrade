@@ -14,6 +14,7 @@ function createServer({ store, secret, localLogin = false, now, random }) {
   recovery.catch(() => { console.error('Room recovery scan failed; check database permissions'); });
   const server = http.createServer((req, res) => {
     if (req.url === '/healthz') { res.writeHead(200); return res.end('ok'); }
+    if (req.url === '/diag') { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ envKeys: Object.keys(process.env).filter(k => /TENCENTCLOUD|SECRET|CLOUD_ENV|SESSION/i.test(k)), hasSecretId: !!process.env.TENCENTCLOUD_SECRETID, hasSecretKey: !!process.env.TENCENTCLOUD_SECRETKEY, cloudEnv: process.env.CLOUD_ENV })); }
     // No test identity endpoint exists in cloud deployments.
     if (localLogin && req.method === 'POST' && req.url === '/dev-login') {
       let body = ''; req.on('data', b => { body += b; if (body.length > 1024) req.destroy(); });
@@ -127,6 +128,7 @@ function createServer({ store, secret, localLogin = false, now, random }) {
   return { server, rooms, close, recovery, advance: async code => { const r = await rooms.tick(code); broadcast(r); return r; } };
 }
 async function main() {
+  console.log('[diag] env keys:', Object.keys(process.env).filter(k => /TENCENTCLOUD|SECRET|CLOUD_ENV|SESSION/i.test(k)).join(','));
   const cloudMode = process.env.STORE === 'cloud';
   if (cloudMode && process.env.DEV_LOGIN === '1') throw Error('云部署禁止开发登录');
   let store;
