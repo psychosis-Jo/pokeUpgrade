@@ -1,0 +1,11 @@
+{
+  "pages": ["pages/table/table"],
+  "window": {
+    "navigationBarTitleText": "碰个牌",
+    "navigationBarBackgroundColor": "#142d28",
+    "navigationBarTextStyle": "white",
+    "backgroundColor": "#102621"
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json"
+}

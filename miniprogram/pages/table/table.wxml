@@ -1,0 +1,49 @@
+<view class="shell">
+  <view class="topbar">
+    <view class="brand"><text class="brand-mark">♠</text><view><text class="brand-name">碰个牌</text><text class="room">好友房 · {{roomCode}}</text></view></view>
+    <button class="voice-btn {{voiceOn ? 'on' : ''}}" bindtap="toggleVoice">{{voiceOn ? '🎙 语音中' : '🔇 已静音'}}</button>
+  </view>
+
+  <view wx:if="{{phase === 'lobby'}}" class="lobby panel">
+    <view class="eyebrow">FRIENDS TABLE · 4 / 4</view>
+    <text class="hero-title">今晚，来一局
+<text class="gold">升级</text>。</text>
+    <text class="hero-sub">和熟人组队，缺一人时让临时牌友补位。</text>
+    <view class="player-grid">
+      <view wx:for="{{players}}" wx:key="name" class="player-card"><view class="avatar">{{item.avatar}}</view><text>{{item.name}}</text><text class="level">打 {{item.level}}</text><text wx:if="{{item.guest}}" class="guest">临时牌友</text></view>
+    </view>
+    <button class="primary wide" bindtap="startRoom">开始这一局 <text>→</text></button>
+    <text class="hint">房主可在准备阶段开启陌生人补位</text>
+  </view>
+
+  <view wx:elif="{{phase === 'calling'}}" class="call panel">
+    <view class="step"><text class="step-dot active">1</text><text>叫主</text><text class="line"></text><text class="step-dot">2</text><text>出牌</text><text class="line"></text><text class="step-dot">3</text><text>结算</text></view>
+    <text class="eyebrow">本局级牌 · {{levelRank}} · {{levelOwner}}的等级</text>
+    <text class="hero-title small">你有级牌，
+<text class="gold">叫一个主。</text></text>
+    <text class="hero-sub">首位叫主者成为庄家，本局不支持反主。</text>
+    <view class="suit-grid"><button wx:for="{{['♥','♦','♣','♠']}}" wx:key="*this" class="suit {{item === '♥' || item === '♦' ? 'red' : ''}}" data-suit="{{item}}" bindtap="callTrump"><text>{{item}}</text><text>叫主</text></button></view>
+    <view class="rule-note"><text>♣ 规则提示</text><text>无人叫主时，全桌投票；3 票同意才重新发牌。</text></view>
+  </view>
+
+  <view wx:elif="{{phase === 'playing'}}" class="table-stage">
+    <view class="table-head"><view><text class="eyebrow">第 {{trickNo}} 轮 · {{trump}} 主</text><text class="table-title">你是庄家，先出牌</text></view><view class="dealer-pill">庄 · 阿沐</view></view>
+    <view class="felt">
+      <view class="seat top"><view class="avatar small-avatar">陈</view><text>陈皮</text><text class="muted">闲家 · 9</text></view>
+      <view class="seat left"><view class="avatar small-avatar">北</view><text>小北</text><text class="muted">队友 · 5</text></view>
+      <view class="seat right"><view class="avatar small-avatar">友</view><text>临时牌友</text><text class="muted">闲家</text></view>
+      <view class="center-trick"><view wx:for="{{trick}}" wx:key="who" class="mini-play"><text>{{item.who}}</text><view class="mini-card {{item.card[2]}}">{{item.card[0]}}
+{{item.card[1]}}</view></view><text wx:if="{{!trick.length}}" class="center-tip">轮到你出牌</text></view>
+      <view class="score-strip"><text>闲家抓分</text><text class="score">{{defenderScore}}<text class="score-total"> / 200</text></text></view>
+    </view>
+    <view class="hand"><view wx:for="{{hand}}" wx:key="index" class="card {{item[2]}} {{selectedCard === index ? 'selected' : ''}}" data-index="{{index}}" bindtap="toggleCard"><text>{{item[0]}}</text><text>{{item[1]}}</text></view></view>
+    <button class="primary play-btn" bindtap="playCard">出牌 <text>→</text></button>
+  </view>
+
+  <view wx:elif="{{phase === 'result'}}" class="result panel"><view class="confetti">✦</view><text class="eyebrow">ROUND COMPLETE · 本局结束</text><text class="hero-title small">{{resultTitle}}</text><text class="result-score">闲家 <text>75</text> 分</text><text class="hero-sub">{{resultText}}</text><view class="highlight"><text>本局名场面</text><text>小北连续接牌 2 次 · 让对手只拿到 75 分</text></view><view class="reward"><text class="reward-icon">🎴</text><view><text>赢家队伍获得 1 张互动卡</text><text class="muted">和队友商量一下，给对面留个记号</text></view></view><button class="primary wide" bindtap="useInteraction">进入互动卡 →</button></view>
+
+  <view wx:elif="{{phase === 'punished'}}" class="result panel"><view class="confetti">✦</view><text class="eyebrow">ONE CARD · 一张互动卡</text><text class="hero-title small">整蛊完成。</text><text class="hero-sub">{{toast}}</text><view class="highlight"><text>下一局继续留在房间</text><text>临时牌友默认留房，也可以随时离开。</text></view><button class="primary wide" bindtap="nextRound">再来一局 →</button></view>
+
+  <view wx:if="{{phase === 'result'}}" class="interaction-drawer"><view class="drawer-title"><text>赢家队伍 · 请选择互动对象和效果</text><text class="muted">演示 · 无倒计时</text></view><view class="target-row"><view wx:for="{{players}}" wx:key="name" wx:if="{{!item.me && item.position !== 'left'}}" class="target {{interactionTarget === item.name ? 'chosen' : ''}}" data-name="{{item.name}}" bindtap="chooseTarget"><view class="avatar tiny">{{item.avatar}}</view><text>{{item.name}}</text></view></view><view class="interaction-row"><button class="interaction {{interactionType === 'graffiti' ? 'chosen' : ''}}" data-type="graffiti" bindtap="chooseInteraction">✎<text>涂鸦</text></button><button class="interaction {{interactionType === 'dance' ? 'chosen' : ''}}" data-type="dance" bindtap="chooseInteraction">🕺<text>挑衅舞</text></button><button class="interaction {{interactionType === 'mute' ? 'chosen' : ''}}" data-type="mute" bindtap="chooseInteraction">🔇<text>禁言</text></button><button class="interaction {{interactionType === 'title' ? 'chosen' : ''}}" data-type="title" bindtap="chooseInteraction">✦<text>称号</text></button></view><button class="primary wide" bindtap="useInteraction">确认使用这张卡</button></view>
+  <view wx:if="{{toast}}" class="toast">{{toast}}</view>
+</view>
